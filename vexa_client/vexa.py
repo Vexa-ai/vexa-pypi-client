@@ -1,15 +1,46 @@
 # vexa_client.py
 
 import requests
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 import os
 from urllib.parse import urljoin
 import time # Import time for sleep
 import re # Import re for parsing meeting ID
 
 # Default Base URL (can be overridden)
-#DEFAULT_BASE_URL = "http://localhost:8056" 
-DEFAULT_BASE_URL = "https://gateway.dev.vexa.ai" 
+#DEFAULT_BASE_URL = "http://localhost:18056" 
+DEFAULT_BASE_URL = "https://api.cloud.vexa.ai"
+
+def parse_url(meeting_url: str) -> Tuple[str, str, Optional[str]]:
+    """
+    Parses a meeting URL to extract platform, meeting ID and passcode.
+    
+    Args:
+        meeting_url: Full meeting URL (e.g., "https://teams.live.com/meet/9398850880426?p=RBZCWdxyp85TpcKna8")
+        
+    Returns:
+        Tuple of (platform, meeting_id, passcode)
+        Note: Zoom support is not currently available
+    """
+    # Teams URL parsing
+    if 'teams.live.com' in meeting_url:
+        meeting_id_match = re.search(r'/meet/(\d+)', meeting_url)
+        meeting_id = meeting_id_match.group(1) if meeting_id_match else ''
+        
+        passcode_match = re.search(r'\?p=([^&]+)', meeting_url)
+        passcode = passcode_match.group(1) if passcode_match else ''
+        
+        return ("teams", meeting_id, passcode)
+    
+    # Google Meet URL parsing (basic support)
+    elif 'meet.google.com' in meeting_url:
+        meeting_id_match = re.search(r'/([a-z0-9-]+)(?:\?|$)', meeting_url)
+        meeting_id = meeting_id_match.group(1) if meeting_id_match else ''
+        
+        return ("google_meet", meeting_id, None)
+    
+    else:
+        raise ValueError(f"Unsupported meeting URL format: {meeting_url}") 
 
 class VexaClientError(Exception):
     """Custom exception for Vexa client errors."""
@@ -23,7 +54,8 @@ class VexaClient:
     def __init__(self, 
                  base_url: str = DEFAULT_BASE_URL, 
                  api_key: Optional[str] = None, 
-                 admin_key: Optional[str] = None):
+                 admin_key: Optional[str] = None,
+                 user_id: Optional[int] = None):
         """
         Initializes the Vexa API client.
 
@@ -31,6 +63,7 @@ class VexaClient:
             base_url: The base URL of the Vexa API Gateway.
             api_key: The API key for regular user operations (X-API-Key).
             admin_key: The API key for administrative operations (X-Admin-API-Key).
+            user_id: The user ID for this client instance.
         """
         # Ensure base_url is a string
         if not isinstance(base_url, str):
@@ -39,6 +72,7 @@ class VexaClient:
         self.base_url = base_url
         self._api_key = api_key
         self._admin_key = admin_key
+        self.user_id = user_id
         self._session = requests.Session()
 
     def _get_headers(self, api_type: str = 'user') -> Dict[str, str]:
@@ -128,16 +162,17 @@ class VexaClient:
 
     # --- Bot Management ---
 
-    def request_bot(self, platform: str, native_meeting_id: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None) -> Dict[str, Any]:
+    def request_bot(self, platform: str, native_meeting_id: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None, passcode: Optional[str] = None) -> Dict[str, Any]:
         """
         Requests a new bot to join a meeting using platform and native ID.
 
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'teams'). Note: Zoom is not currently supported.
             native_meeting_id: The platform-specific meeting identifier.
             bot_name: Optional name for the bot in the meeting.
             language: Optional language code for transcription (e.g., 'en', 'es').
             task: Optional transcription task ('transcribe' or 'translate').
+            passcode: Optional passcode for Teams meetings (required for Teams, not allowed for Google Meet).
 
         Returns:
             Dictionary representing the created/updated Meeting object.
@@ -152,8 +187,26 @@ class VexaClient:
             payload["language"] = language
         if task:
             payload["task"] = task
+        if passcode:
+            payload["passcode"] = passcode
             
         return self._request("POST", "/bots", api_type='user', json_data=payload)
+
+    def request_bot_from_url(self, meeting_url: str, bot_name: Optional[str] = None, language: Optional[str] = None, task: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Convenience method to request a bot using a full meeting URL.
+        
+        Args:
+            meeting_url: Full meeting URL (e.g., "https://teams.live.com/meet/9398850880426?p=RBZCWdxyp85TpcKna8")
+            bot_name: Optional name for the bot in the meeting.
+            language: Optional language code for transcription (e.g., 'en', 'es').
+            task: Optional transcription task ('transcribe' or 'translate').
+            
+        Returns:
+            Dictionary representing the created/updated Meeting object.
+        """
+        platform, meeting_id, passcode = parse_url(meeting_url)
+        return self.request_bot(platform, meeting_id, bot_name, language, task, passcode)
 
     def stop_bot(self, platform: str, native_meeting_id: str) -> Dict[str, str]:
         """
@@ -161,7 +214,7 @@ class VexaClient:
         The API returns a 202 Accepted response immediately while the stop happens in the background.
 
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'teams'). Note: Zoom is not currently supported.
             native_meeting_id: The platform-specific meeting identifier.
 
         Returns:
@@ -256,7 +309,7 @@ class VexaClient:
         Retrieves a specific meeting by platform and native ID from the user's meetings list.
         
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'teams'). Note: Zoom is not currently supported.
             native_meeting_id: The platform-specific meeting identifier.
             
         Returns:
@@ -308,19 +361,24 @@ class VexaClient:
         """
         return meeting.get("data", {}).get("languages", [])
 
-    def get_transcript(self, platform: str, native_meeting_id: str) -> Dict[str, Any]:
+    def get_transcript(self, platform: str, native_meeting_id: str, meeting_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Retrieves the transcript for a specific meeting using platform and native ID.
 
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'teams'). Note: Zoom is not currently supported.
             native_meeting_id: The platform-specific meeting identifier.
+            meeting_id: Optional specific database meeting ID. If provided, returns that exact meeting.
+                       If not provided, returns the latest meeting for the platform/native_meeting_id combination.
 
         Returns:
             Dictionary containing meeting details and transcript segments.
         """
         path = f"/transcripts/{platform}/{native_meeting_id}"
-        return self._request("GET", path, api_type='user')
+        params = {}
+        if meeting_id is not None:
+            params['meeting_id'] = meeting_id
+        return self._request("GET", path, api_type='user', params=params)
 
     def update_meeting_data(self, 
                            platform: str, 
@@ -333,7 +391,7 @@ class VexaClient:
         Updates meeting metadata. Only name, participants, languages, and notes can be updated.
 
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'teams'). Note: Zoom is not currently supported.
             native_meeting_id: The platform-specific meeting identifier.
             name: Optional meeting name/title.
             participants: Optional list of participant names.
@@ -366,7 +424,7 @@ class VexaClient:
         Deletes a meeting and all its associated transcripts.
         
         Args:
-            platform: Platform identifier (e.g., 'google_meet', 'zoom').
+            platform: Platform identifier (e.g., 'google_meet', 'teams'). Note: Zoom is not currently supported.
             native_meeting_id: The platform-specific meeting identifier.
             
         Returns:
@@ -419,6 +477,28 @@ class VexaClient:
              payload["max_concurrent_bots"] = max_concurrent_bots
              
         return self._request("POST", "/admin/users", api_type='admin', json_data=payload)
+
+    def create_user_and_set_id(self, 
+                               email: str, 
+                               name: Optional[str] = None, 
+                               image_url: Optional[str] = None,
+                               max_concurrent_bots: Optional[int] = None
+                              ) -> Dict[str, Any]:
+        """
+        Creates a new user and automatically sets self.user_id (Admin Only).
+
+        Args:
+            email: The email address for the new user.
+            name: Optional name for the user.
+            image_url: Optional URL for the user's image.
+            max_concurrent_bots: Optional maximum number of concurrent bots allowed (defaults server-side if None).
+
+        Returns:
+            Dictionary representing the created User object.
+        """
+        user_data = self.create_user(email, name, image_url, max_concurrent_bots)
+        self.user_id = user_data.get('id')
+        return user_data
 
     def list_users(self, skip: int = 0, limit: int = 100) -> List[Dict[str, Any]]:
         """
@@ -482,14 +562,28 @@ class VexaClient:
 
     # --- Admin: Token Management ---
 
-    def create_token(self, user_id: int) -> Dict[str, Any]:
+    def create_token(self, user_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Generates a new API token for a specific user (Admin Only).
+        If no user_id is provided, uses self.user_id.
 
         Args:
-            user_id: The ID of the user for whom to create the token.
+            user_id: The ID of the user for whom to create the token. If None, uses self.user_id.
 
         Returns:
             Dictionary representing the created APIToken object.
         """
+        if user_id is None:
+            if self.user_id is None:
+                raise VexaClientError("user_id must be provided either as parameter or set in client instance.")
+            user_id = self.user_id
         return self._request("POST", f"/admin/users/{user_id}/tokens", api_type='admin')
+
+    def set_api_key(self, api_key: str) -> None:
+        """
+        Sets the API key for this client instance.
+
+        Args:
+            api_key: The API key to set for user operations.
+        """
+        self._api_key = api_key

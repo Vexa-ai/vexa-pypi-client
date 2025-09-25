@@ -81,7 +81,11 @@ meeting = client.request_bot(
 
 # get meeting transcript during or after the meeting
 
-transcript = client.get_transcript("google_meet",meeting_id)
+# Option 1: Get latest meeting by platform + native_meeting_id (backward compatible)
+transcript = client.get_transcript("google_meet", "abc-defg-hij")
+
+# Option 2: Get specific meeting by database ID (new feature)
+transcript = client.get_transcript("google_meet", "abc-defg-hij", meeting_id=123)
 
 
 # switch to translation to a different language instead of transcription during meeting
