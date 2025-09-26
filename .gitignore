@@ -84,4 +84,10 @@ Thumbs.db
 *.temp
 
 # Project specific
-pyproject.toml.backup 
+pyproject.toml.backup
+
+# PyPI configuration (contains sensitive API tokens)
+.pypirc
+
+# Publishing artifacts
+*.log 
