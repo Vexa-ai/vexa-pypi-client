@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="vexa-client",
-    version="0.5.3",
+    version="0.5.4",
     author="Vexa Team",
     author_email="support@vexa.ai",
     description="Python client library for Vexa - privacy-first, open-source API for real-time meeting transcription",

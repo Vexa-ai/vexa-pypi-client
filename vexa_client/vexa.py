@@ -95,7 +95,8 @@ class VexaClient:
                  path: str, 
                  api_type: str = 'user', 
                  params: Optional[Dict[str, Any]] = None, 
-                 json_data: Optional[Dict[str, Any]] = None) -> Any:
+                 json_data: Optional[Dict[str, Any]] = None,
+                 timeout: Optional[float] = None) -> Any:
         """
         Internal helper method to make requests to the API gateway.
 
@@ -105,23 +106,20 @@ class VexaClient:
             api_type: Type of API key required ('user' or 'admin').
             params: Optional dictionary of query parameters.
             json_data: Optional dictionary for the JSON request body.
+            timeout: Request timeout in seconds (default: 10s).
 
         Returns:
             The JSON response from the API.
 
         Raises:
-            VexaClientError: If the required API key is missing.
-            requests.exceptions.RequestException: For connection or other request errors.
-            requests.exceptions.HTTPError: For non-2xx status codes.
+            VexaClientError: If the required API key is missing or request fails.
         """
         url = urljoin(self.base_url, path)
         headers = self._get_headers(api_type)
         
-        # Debug output - print URL and headers for troubleshooting
-        print(f"\nDEBUG: Making {method} request to {url}")
-        print(f"DEBUG: Headers: {headers}")
-        print(f"DEBUG: Params: {params}")
-        print(f"DEBUG: JSON data: {json_data}")
+        # Set default timeout if not provided
+        if timeout is None:
+            timeout = 10.0
         
         try:
             response = self._session.request(
@@ -129,15 +127,9 @@ class VexaClient:
                 url=url,
                 headers=headers,
                 params=params,
-                json=json_data
+                json=json_data,
+                timeout=timeout
             )
-            # Debug response
-            print(f"DEBUG: Response status: {response.status_code}")
-            print(f"DEBUG: Response headers: {dict(response.headers)}")
-            try:
-                print(f"DEBUG: Response content: {response.text[:500]}...")
-            except:
-                print(f"DEBUG: Could not display response content")
                 
             response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
             
@@ -147,7 +139,7 @@ class VexaClient:
             
             return response.json()
         except requests.exceptions.JSONDecodeError:
-            raise VexaClientError(f"Failed to decode JSON response from {method} {url}. Status: {response.status_code}, Body: {response.text}")
+            raise VexaClientError(f"Failed to decode JSON response from {method} {url}. Status: {response.status_code}")
         except requests.exceptions.HTTPError as e:
             # Attempt to include API error details if available
             try:
